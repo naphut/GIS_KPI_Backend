@@ -17,9 +17,13 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+db_url = settings.DATABASE_URL
+if db_url.startswith("postgresql://"):
+    db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
 # Create async engine with optimized production pooling settings
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    db_url,
     echo=True if settings.APP_ENV == "development" else False,
     pool_size=10,            # Connection pool size
     max_overflow=20,         # Overflow connections beyond pool_size
