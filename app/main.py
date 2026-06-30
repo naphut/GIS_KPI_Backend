@@ -32,9 +32,9 @@ async def lifespan(app: FastAPI):
             if not existing_units:
                 logger.info("Seeding units to the database...")
                 initial_units = [
-                    "BAN", "BAT", "CHA", "CHH", "KAM", "KAN", "KOH", "KRA",
-                    "MON", "ODD", "PNP", "PRE", "PRH", "PUR", "ROT", "SIE",
-                    "SIH", "SPE", "STU", "SVA", "TAK", "THO"
+                    "BAN", "BAT", "CHA", "CHH", "KAM", "KAN", "KANZ1", "KOH", "KRA",
+                    "MON", "ODD", "PNP", "PNPZ1", "PNPZ2", "PRE", "PRH", "PUR", "ROT",
+                    "SIE", "SIH", "SPE", "STU", "SVA", "TAK", "THO"
                 ]
                 for unit_name in initial_units:
                     db_unit = models.Unit(name=unit_name, description=f"GIS Unit for {unit_name}")

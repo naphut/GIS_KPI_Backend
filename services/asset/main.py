@@ -19,8 +19,25 @@ async def lifespan(app: FastAPI):
     # Initialize DB tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("Asset Microservice Database initialized.")
-    
+    # Seed/Update units in database
+    from services.common.database import async_session
+    async with async_session() as session:
+        result = await session.execute(select(models.Unit))
+        existing_units = {u.name for u in result.scalars().all()}
+        initial_units = [
+            "BAN", "BAT", "CHA", "CHH", "KAM", "KAN", "KANZ1", "KOH", "KRA",
+            "MON", "ODD", "PNP", "PNPZ1", "PNPZ2", "PRE", "PRH", "PUR", "ROT",
+            "SIE", "SIH", "SPE", "STU", "SVA", "TAK", "THO"
+        ]
+        new_units = [u for u in initial_units if u not in existing_units]
+        if new_units:
+            logger.info(f"Seeding missing units to the database: {new_units}")
+            for unit_name in new_units:
+                db_unit = models.Unit(name=unit_name, description=f"GIS Unit for {unit_name}")
+                session.add(db_unit)
+            await session.commit()
+            logger.info("Missing units seeded successfully.")
+
     # Initialize Cache connection
     await cache.connect()
     yield
