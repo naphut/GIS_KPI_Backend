@@ -50,6 +50,8 @@ class GISStore(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True, index=True)
     value: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft, completed, cleared
+    result: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # Store result JSON
     
     # Scalability optimizations:
     # 1. Index on updated_at for fast date filtering/sorting queries.

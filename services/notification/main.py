@@ -10,6 +10,8 @@ from sqlalchemy.future import select
 from services.common.database import engine, Base, get_db, settings, async_session
 from services.common import models, schemas
 import httpx
+import json
+import asyncio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("notification_service")
@@ -27,6 +29,40 @@ class TelegramBot:
             logger.warning("Telegram Bot token or Chat ID not configured. Skipping message send.")
             return False
 
+        # Telegram character limit is 4096. We split at 3900 to leave safety margin.
+        if len(text) <= 3900:
+            return await self._send_single_message(text, target_chat_id)
+
+        logger.info(f"Message too long ({len(text)} characters). Splitting into chunks...")
+        
+        # Split by lines
+        lines = text.split("\n")
+        chunks = []
+        current_chunk = ""
+        for line in lines:
+            if len(current_chunk) + len(line) + 1 > 3900:
+                if current_chunk.strip():
+                    chunks.append(current_chunk.strip())
+                current_chunk = line + "\n"
+            else:
+                current_chunk += line + "\n"
+        if current_chunk.strip():
+            chunks.append(current_chunk.strip())
+
+        success = True
+        for i, chunk in enumerate(chunks):
+            # Append page number
+            if len(chunks) > 1:
+                chunk += f"\n\n📄 <b>Part {i+1}/{len(chunks)}</b>"
+            res = await self._send_single_message(chunk, target_chat_id)
+            if not res:
+                success = False
+            # Small delay to prevent rate limits
+            if i < len(chunks) - 1:
+                await asyncio.sleep(0.5)
+        return success
+
+    async def _send_single_message(self, text: str, target_chat_id: str) -> bool:
         url = f"{self.base_url}/sendMessage"
         payload = {
             "chat_id": target_chat_id,
@@ -112,6 +148,90 @@ async def send_message(payload: TelegramMessageRequest):
     return {
         "success": success,
         "message": "Message sent successfully" if success else "Failed to send message"
+    }
+
+class TelegramSendLatestRequest(BaseModel):
+    key: str
+    chat_id: Optional[str] = None
+    token: Optional[str] = None
+
+@app.post("/telegram/send-latest")
+async def send_latest_telegram(payload: TelegramSendLatestRequest):
+    # 1. Fetch data from Asset Microservice
+    asset_url = f"http://127.0.0.1:8001/store/{payload.key}"
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(asset_url, timeout=10.0)
+            if res.status_code != 200:
+                return {
+                    "success": False,
+                    "message": f"Store key '{payload.key}' not found or error retrieving it."
+                }
+            store_data = res.json()
+    except Exception as e:
+        logger.error(f"Failed to fetch store key '{payload.key}' from Asset microservice: {e}")
+        return {
+            "success": False,
+            "message": f"Connection error fetching store key: {e}"
+        }
+
+    status_str = store_data.get("status")
+    if status_str not in ("completed", "cleared"):
+        return {
+            "success": False,
+            "message": f"No completed or cleared data found. Current status is '{status_str}'."
+        }
+
+    # 2. Parse value and build HTML message
+    raw_val = store_data.get("value")
+    try:
+        value_data = json.loads(raw_val)
+    except Exception:
+        value_data = raw_val
+
+    # Create html message
+    message = f"📊 <b>GIS KPI STATUS UPDATE</b>\n"
+    message += f"🔑 <b>Key:</b> {payload.key}\n"
+    message += f"🚦 <b>Status:</b> {status_str.upper()} ✅\n"
+    if store_data.get("result"):
+        try:
+            res_obj = json.loads(store_data["result"])
+            message += f"⏰ <b>Timestamp:</b> {res_obj.get('timestamp', '-')}\n"
+        except Exception:
+            pass
+    message += "\n"
+
+    if isinstance(value_data, list):
+        message += f"📋 <b>Total Records:</b> {len(value_data)}\n"
+        if len(value_data) > 0:
+            message += f"\n<b>Items:</b>\n"
+            for i, item in enumerate(value_data):
+                code = item.get("code") or item.get("importRequestCode") or item.get("requestExportCode") or "-"
+                unit = item.get("unit") or "-"
+                message += f"{i+1}. <code>{code}</code> (Unit: {unit})\n"
+    elif isinstance(value_data, dict):
+        message += f"📝 <b>Summary Details:</b>\n"
+        for k, v in value_data.items():
+            message += f"• {k}: {v}\n"
+
+    # 3. Send message to Telegram
+    bot_token = payload.token or settings.TELEGRAM_BOT_TOKEN
+    target_chat_id = payload.chat_id or settings.TELEGRAM_CHAT_ID
+
+    if not bot_token or not target_chat_id or "your_telegram" in bot_token:
+        return {
+            "success": False,
+            "message": "Telegram configuration missing or invalid. Bot token/Chat ID not set.",
+            "data": store_data
+        }
+
+    bot = TelegramBot(token=bot_token, chat_id=target_chat_id)
+    success = await bot.send_message(message)
+
+    return {
+        "success": success,
+        "message": "Latest completed data sent successfully" if success else "Failed to send message",
+        "data": store_data
     }
 
 @app.post("/telegram/webhook")

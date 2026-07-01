@@ -16,8 +16,14 @@ logger = logging.getLogger("asset_service")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize DB tables
+    # Initialize DB tables and perform online schema migrations
     async with engine.begin() as conn:
+        from sqlalchemy import text
+        try:
+            await conn.execute(text("ALTER TABLE gis_store ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'draft'"))
+            await conn.execute(text("ALTER TABLE gis_store ADD COLUMN IF NOT EXISTS result VARCHAR NULL"))
+        except Exception as e:
+            logger.warning(f"Schema migration warning: {e}")
         await conn.run_sync(Base.metadata.create_all)
     # Seed/Update units in database
     from services.common.database import async_session
@@ -65,10 +71,16 @@ async def upsert_store_item(db: AsyncSession, key: str, value: str):
     result = await db.execute(select(models.GISStore).where(models.GISStore.key == key))
     db_item = result.scalar_one_or_none()
     if db_item:
+        # Always update value
         db_item.value = value
+        # If previous status was completed or cleared, reset it to draft
+        if db_item.status != "draft":
+            logger.info(f"Key '{key}' was in '{db_item.status}' status. Overwriting and resetting to 'draft'.")
+            db_item.status = "draft"
+            db_item.result = None
         db_item.version += 1
     else:
-        db_item = models.GISStore(key=key, value=value, version=1)
+        db_item = models.GISStore(key=key, value=value, status="draft", version=1)
         db.add(db_item)
     await db.commit()
     await db.refresh(db_item)
@@ -92,17 +104,22 @@ async def health():
 # Key-Value Store Endpoints with Cache Integration
 @app.get("/store/{key}", response_model=schemas.GISStore)
 async def get_store_value(key: str, db: AsyncSession = Depends(get_db)):
-    # 1. Read from Redis Cache
-    cached_val = await cache.get(f"store:{key}")
-    if cached_val:
-        logger.info(f"Redis Cache HIT for key: {key}")
-        cached_data = json.loads(cached_val)
-        return schemas.GISStore(
-            key=key,
-            value=cached_data["value"],
-            updated_at=cached_data["updated_at"],
-            version=cached_data["version"]
-        )
+    # 1. Read status and payload from Redis Cache
+    status_val = await cache.get(f"store:{key}:status")
+    if status_val:
+        status_str = status_val.decode('utf-8')
+        cached_val = await cache.get(f"store:{key}:{status_str}")
+        if cached_val:
+            logger.info(f"Redis Cache HIT for key: {key} with status: {status_str}")
+            cached_data = json.loads(cached_val)
+            return schemas.GISStore(
+                key=key,
+                value=cached_data["value"],
+                status=status_str,
+                result=cached_data.get("result"),
+                updated_at=datetime.fromisoformat(cached_data["updated_at"]),
+                version=cached_data["version"]
+            )
 
     # 2. Database Fallback on Cache Miss
     logger.info(f"Redis Cache MISS for key: {key}. Querying database.")
@@ -116,23 +133,33 @@ async def get_store_value(key: str, db: AsyncSession = Depends(get_db)):
     # 3. Write to Cache
     payload = {
         "value": db_item.value,
+        "result": db_item.result,
         "updated_at": db_item.updated_at.isoformat(),
         "version": db_item.version
     }
-    await cache.set(f"store:{key}", json.dumps(payload), ex=3600)
+    await cache.set(f"store:{key}:status", db_item.status, ex=3600)
+    await cache.set(f"store:{key}:{db_item.status}", json.dumps(payload), ex=3600)
     return db_item
 
 @app.post("/store", response_model=schemas.GISStore)
 async def upsert_store_value(payload: schemas.GISStoreCreate, db: AsyncSession = Depends(get_db)):
     db_item = await upsert_store_item(db, key=payload.key, value=payload.value)
     
+    # Invalidate old caches
+    await cache.delete(f"store:{payload.key}:status")
+    await cache.delete(f"store:{payload.key}:draft")
+    await cache.delete(f"store:{payload.key}:completed")
+    await cache.delete(f"store:{payload.key}:cleared")
+
     # Update cache
     cache_payload = {
         "value": db_item.value,
+        "result": db_item.result,
         "updated_at": db_item.updated_at.isoformat(),
         "version": db_item.version
     }
-    await cache.set(f"store:{payload.key}", json.dumps(cache_payload), ex=3600)
+    await cache.set(f"store:{payload.key}:status", db_item.status, ex=3600)
+    await cache.set(f"store:{payload.key}:{db_item.status}", json.dumps(cache_payload), ex=3600)
     logger.info(f"Database write and Cache update completed for key: {payload.key}")
     return db_item
 
@@ -144,10 +171,127 @@ async def delete_store_value(key: str, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Key '{key}' not found in store."
         )
-    # Clear cache
-    await cache.delete(f"store:{key}")
+    # Clear all caches
+    await cache.delete(f"store:{key}:status")
+    await cache.delete(f"store:{key}:draft")
+    await cache.delete(f"store:{key}:completed")
+    await cache.delete(f"store:{key}:cleared")
     logger.info(f"Database deletion and Cache clearance completed for key: {key}")
     return {"detail": f"Key '{key}' deleted successfully"}
+
+@app.post("/store/{key}/complete", response_model=schemas.GISStore)
+async def complete_store_value(key: str, db: AsyncSession = Depends(get_db)):
+    db_item = await get_store_item(db, key)
+    if not db_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Key '{key}' not found in store."
+        )
+    
+    db_item.status = "completed"
+    db_item.result = json.dumps({
+        "result": "completed",
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    db_item.version += 1
+    await db.commit()
+    await db.refresh(db_item)
+    
+    # Invalidate and update cache
+    await cache.delete(f"store:{key}:status")
+    await cache.delete(f"store:{key}:draft")
+    await cache.delete(f"store:{key}:completed")
+    await cache.delete(f"store:{key}:cleared")
+    
+    cache_payload = {
+        "value": db_item.value,
+        "result": db_item.result,
+        "updated_at": db_item.updated_at.isoformat(),
+        "version": db_item.version
+    }
+    await cache.set(f"store:{key}:status", "completed", ex=3600)
+    await cache.set(f"store:{key}:completed", json.dumps(cache_payload), ex=3600)
+    return db_item
+
+@app.post("/store/{key}/clear", response_model=schemas.GISStore)
+async def clear_store_value(key: str, db: AsyncSession = Depends(get_db)):
+    db_item = await get_store_item(db, key)
+    if not db_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Key '{key}' not found in store."
+        )
+    
+    db_item.status = "cleared"
+    db_item.result = json.dumps({
+        "result": "cleared",
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    db_item.version += 1
+    await db.commit()
+    await db.refresh(db_item)
+    
+    # Invalidate and update cache
+    await cache.delete(f"store:{key}:status")
+    await cache.delete(f"store:{key}:draft")
+    await cache.delete(f"store:{key}:completed")
+    await cache.delete(f"store:{key}:cleared")
+    
+    cache_payload = {
+        "value": db_item.value,
+        "result": db_item.result,
+        "updated_at": db_item.updated_at.isoformat(),
+        "version": db_item.version
+    }
+    await cache.set(f"store:{key}:status", "cleared", ex=3600)
+    await cache.set(f"store:{key}:cleared", json.dumps(cache_payload), ex=3600)
+    return db_item
+
+@app.get("/store/{key}/latest", response_model=schemas.GISStore)
+async def get_latest_store_value(key: str, db: AsyncSession = Depends(get_db)):
+    return await get_store_value(key, db)
+
+@app.get("/store/{key}/completed", response_model=schemas.GISStore)
+async def get_completed_store_value(key: str, db: AsyncSession = Depends(get_db)):
+    # Try reading from cache
+    cached_val = await cache.get(f"store:{key}:completed")
+    if cached_val:
+        logger.info(f"Redis Cache HIT for completed key: {key}")
+        cached_data = json.loads(cached_val)
+        return schemas.GISStore(
+            key=key,
+            value=cached_data["value"],
+            status="completed",
+            result=cached_data.get("result"),
+            updated_at=datetime.fromisoformat(cached_data["updated_at"]),
+            version=cached_data["version"]
+        )
+    
+    db_item = await get_store_item(db, key)
+    if not db_item or db_item.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Completed key '{key}' not found or not in completed status."
+        )
+    
+    cache_payload = {
+        "value": db_item.value,
+        "result": db_item.result,
+        "updated_at": db_item.updated_at.isoformat(),
+        "version": db_item.version
+    }
+    await cache.set(f"store:{key}:completed", json.dumps(cache_payload), ex=3600)
+    return db_item
+
+@app.get("/store/{key}/status")
+async def get_store_status(key: str, db: AsyncSession = Depends(get_db)):
+    db_item = await get_store_item(db, key)
+    if not db_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Key '{key}' not found in store."
+        )
+    return {"status": db_item.status}
 
 # Units Endpoints
 @app.get("/units", response_model=list[schemas.Unit])

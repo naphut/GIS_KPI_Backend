@@ -26,6 +26,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def root():
+    return {"message": "GIS API Gateway is running.", "health": "/health", "status": "active"}
+
 @app.get("/health")
 async def health():
     return {"status": "healthy", "service": "gateway"}

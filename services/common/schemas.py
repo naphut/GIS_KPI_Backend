@@ -62,6 +62,8 @@ class GISStoreCreate(GISStoreBase):
     pass
 
 class GISStore(GISStoreBase):
+    status: str
+    result: Optional[str] = None
     updated_at: datetime
     version: int
 
