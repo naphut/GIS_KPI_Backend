@@ -107,7 +107,7 @@ async def get_store_value(key: str, db: AsyncSession = Depends(get_db)):
     # 1. Read status and payload from Redis Cache
     status_val = await cache.get(f"store:{key}:status")
     if status_val:
-        status_str = status_val.decode('utf-8')
+        status_str = status_val.decode('utf-8') if isinstance(status_val, bytes) else status_val
         cached_val = await cache.get(f"store:{key}:{status_str}")
         if cached_val:
             logger.info(f"Redis Cache HIT for key: {key} with status: {status_str}")
