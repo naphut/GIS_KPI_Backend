@@ -44,10 +44,18 @@ class TelegramTemplate(Base):
 class GISStore(Base):
     """
     Key-Value store to persist frontend dashboard data in compressed JSON format.
-    Ensures minimal database storage footprint using PostgreSQL TOAST compression.
+    Includes indices and versioning for high scalability and concurrent writes.
     """
     __tablename__ = "gis_store"
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True, index=True)
-    value: Mapped[str] = mapped_column(String, nullable=False)  # Store as JSON-string for maximum compression
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    value: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", server_default="draft", nullable=False)  # draft, completed, cleared
+    result: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # Store result JSON
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, 
+        default=datetime.utcnow, 
+        onupdate=datetime.utcnow,
+        index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)

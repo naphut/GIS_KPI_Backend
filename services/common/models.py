@@ -50,7 +50,7 @@ class GISStore(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True, index=True)
     value: Mapped[str] = mapped_column(String, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft, completed, cleared
+    status: Mapped[str] = mapped_column(String(20), default="draft", server_default="draft", nullable=False)  # draft, completed, cleared
     result: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # Store result JSON
     
     # Scalability optimizations:
@@ -63,4 +63,4 @@ class GISStore(Base):
     )
     
     # 2. Concurrency check version for optimistic locking.
-    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
