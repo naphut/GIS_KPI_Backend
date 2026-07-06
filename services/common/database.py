@@ -21,6 +21,17 @@ db_url = settings.DATABASE_URL
 if db_url.startswith("postgresql://"):
     db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
+connect_args = {}
+if "sslmode=" in db_url or "neon.tech" in db_url:
+    connect_args["ssl"] = True
+    import urllib.parse
+    parsed = urllib.parse.urlparse(db_url)
+    query_params = urllib.parse.parse_qs(parsed.query)
+    query_params.pop("sslmode", None)
+    query_params.pop("channel_binding", None)
+    new_query = urllib.parse.urlencode(query_params, doseq=True)
+    db_url = urllib.parse.urlunparse(parsed._replace(query=new_query))
+
 # Create async engine with optimized production pooling settings
 engine = create_async_engine(
     db_url,
@@ -29,7 +40,8 @@ engine = create_async_engine(
     max_overflow=20,         # Overflow connections beyond pool_size
     pool_timeout=30,         # Seconds to wait for a connection
     pool_recycle=1800,       # Recycle connection after 30 minutes
-    pool_pre_ping=True       # Ping database to check connection health before use
+    pool_pre_ping=True,      # Ping database to check connection health before use
+    connect_args=connect_args
 )
 
 # Async session maker

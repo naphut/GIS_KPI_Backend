@@ -17,6 +17,11 @@ logger = logging.getLogger("asset_service")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize DB tables and perform online schema migrations
+    # Initialize DB tables first
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        
+    # Perform online schema migrations
     async with engine.begin() as conn:
         from sqlalchemy import text
         try:
@@ -24,7 +29,6 @@ async def lifespan(app: FastAPI):
             await conn.execute(text("ALTER TABLE gis_store ADD COLUMN IF NOT EXISTS result VARCHAR NULL"))
         except Exception as e:
             logger.warning(f"Schema migration warning: {e}")
-        await conn.run_sync(Base.metadata.create_all)
     # Seed/Update units in database
     from services.common.database import async_session
     async with async_session() as session:
