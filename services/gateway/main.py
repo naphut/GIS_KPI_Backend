@@ -72,10 +72,12 @@ async def gateway_proxy(request: Request, path: str):
                 timeout=30.0
             )
             
-            # Forward headers correctly
+            # Forward headers correctly and strip upstream CORS headers to avoid duplicate header conflicts
             response_headers = dict(res.headers)
             response_headers.pop("content-encoding", None)
             response_headers.pop("content-length", None)
+            response_headers.pop("access-control-allow-origin", None)
+            response_headers.pop("access-control-allow-credentials", None)
             
             return Response(
                 content=res.content,
