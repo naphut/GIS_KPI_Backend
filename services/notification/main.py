@@ -13,6 +13,9 @@ import httpx
 import json
 import asyncio
 
+# Global reusable HTTP client for outgoing requests and inter-service communication
+http_client = httpx.AsyncClient(timeout=10.0)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("notification_service")
 
@@ -71,12 +74,11 @@ class TelegramBot:
         }
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, timeout=10.0)
-                if response.status_code == 200:
-                    return True
-                logger.error(f"Failed to send Telegram message: {response.status_code} - {response.text}")
-                return False
+            response = await http_client.post(url, json=payload)
+            if response.status_code == 200:
+                return True
+            logger.error(f"Failed to send Telegram message: {response.status_code} - {response.text}")
+            return False
         except Exception as e:
             logger.error(f"Exception occurred while sending Telegram message: {e}")
             return False
@@ -109,6 +111,8 @@ async def lifespan(app: FastAPI):
             logger.info("Default templates seeded successfully.")
 
     yield
+    await http_client.aclose()
+    logger.info("Notification Microservice client closed.")
 
 app = FastAPI(
     title="GIS Notification Microservice",
@@ -160,14 +164,13 @@ async def send_latest_telegram(payload: TelegramSendLatestRequest):
     # 1. Fetch data from Asset Microservice
     asset_url = f"http://127.0.0.1:8001/store/{payload.key}"
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(asset_url, timeout=10.0)
-            if res.status_code != 200:
-                return {
-                    "success": False,
-                    "message": f"Store key '{payload.key}' not found or error retrieving it."
-                }
-            store_data = res.json()
+        res = await http_client.get(asset_url)
+        if res.status_code != 200:
+            return {
+                "success": False,
+                "message": f"Store key '{payload.key}' not found or error retrieving it."
+            }
+        store_data = res.json()
     except Exception as e:
         logger.error(f"Failed to fetch store key '{payload.key}' from Asset microservice: {e}")
         return {

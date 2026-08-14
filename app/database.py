@@ -33,10 +33,15 @@ if "sslmode=" in db_url or "neon.tech" in db_url:
     new_query = urllib.parse.urlencode(query_params, doseq=True)
     db_url = urllib.parse.urlunparse(parsed._replace(query=new_query))
 
-# Create async engine
+# Create async engine with optimized connection pooling
 engine = create_async_engine(
     db_url,
     echo=True if settings.APP_ENV == "development" else False,
+    pool_size=30,            # Base pool size
+    max_overflow=50,         # Max overflow connections
+    pool_timeout=15,         # Keep wait time lower
+    pool_recycle=1800,       # Recycle stale connections
+    pool_pre_ping=True,      # Check connection availability
     connect_args=connect_args
 )
 

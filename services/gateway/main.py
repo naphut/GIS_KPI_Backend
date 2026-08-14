@@ -16,7 +16,19 @@ SERVICES = {
     "kpis": "http://127.0.0.1:8003"
 }
 
-app = FastAPI(title="GIS API Gateway Service", version="1.0.0")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize global reusable client with keep-alive connection pooling
+    limits = httpx.Limits(max_keepalive_connections=200, max_connections=1000)
+    app.state.client = httpx.AsyncClient(limits=limits, timeout=30.0)
+    logger.info("Gateway global AsyncClient initialized with keep-alive pooling.")
+    yield
+    await app.state.client.aclose()
+    logger.info("Gateway global AsyncClient closed.")
+
+app = FastAPI(title="GIS API Gateway Service", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,28 +74,27 @@ async def gateway_proxy(request: Request, path: str):
     logger.info(f"Gateway routing {method} /api/{path} -> {target_url}")
 
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.request(
-                method=method,
-                url=target_url,
-                headers=headers,
-                params=query_params,
-                content=body,
-                timeout=30.0
-            )
-            
-            # Forward headers correctly and strip upstream CORS headers to avoid duplicate header conflicts
-            response_headers = dict(res.headers)
-            response_headers.pop("content-encoding", None)
-            response_headers.pop("content-length", None)
-            response_headers.pop("access-control-allow-origin", None)
-            response_headers.pop("access-control-allow-credentials", None)
-            
-            return Response(
-                content=res.content,
-                status_code=res.status_code,
-                headers=response_headers
-            )
+        client = request.app.state.client
+        res = await client.request(
+            method=method,
+            url=target_url,
+            headers=headers,
+            params=query_params,
+            content=body
+        )
+        
+        # Forward headers correctly and strip upstream CORS headers to avoid duplicate header conflicts
+        response_headers = dict(res.headers)
+        response_headers.pop("content-encoding", None)
+        response_headers.pop("content-length", None)
+        response_headers.pop("access-control-allow-origin", None)
+        response_headers.pop("access-control-allow-credentials", None)
+        
+        return Response(
+            content=res.content,
+            status_code=res.status_code,
+            headers=response_headers
+        )
     except Exception as e:
         logger.error(f"Gateway proxy connection error to {target_url}: {e}")
         raise HTTPException(
