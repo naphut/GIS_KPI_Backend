@@ -62,6 +62,9 @@ class GISStoreCreate(GISStoreBase):
     pass
 
 class GISStore(GISStoreBase):
+    created_at: Optional[datetime] = None
     updated_at: datetime
+    status: Optional[str] = "draft"
+    version: Optional[int] = 1
 
     model_config = ConfigDict(from_attributes=True)

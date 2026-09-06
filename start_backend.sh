@@ -2,7 +2,7 @@
 # start_backend.sh - Launcher for GIS Backend Microservices
 
 # Clear screen
-clear
+clear 2>/dev/null || true
 
 echo "========================================================="
 echo "        Starting GIS Backend Microservices               "

@@ -54,6 +54,11 @@ class GISStore(Base):
     result: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # Store result JSON
     
     # Scalability optimizations:
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        index=True
+    )
     # 1. Index on updated_at for fast date filtering/sorting queries.
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, 

@@ -123,8 +123,14 @@ async def upsert_store_value(db: AsyncSession, item: schemas.GISStoreCreate):
     
     if db_item:
         db_item.value = item.value
+        db_item.updated_at = datetime.utcnow()
     else:
-        db_item = models.GISStore(key=item.key, value=item.value)
+        db_item = models.GISStore(
+            key=item.key, 
+            value=item.value,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
         db.add(db_item)
         
     await db.commit()

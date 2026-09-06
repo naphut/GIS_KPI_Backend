@@ -78,6 +78,7 @@ async def upsert_store_item(db: AsyncSession, key: str, value: str):
     if db_item:
         # Always update value
         db_item.value = value
+        db_item.updated_at = datetime.utcnow()
         # If previous status was completed or cleared, reset it to draft
         if db_item.status != "draft":
             logger.info(f"Key '{key}' was in '{db_item.status}' status. Overwriting and resetting to 'draft'.")
@@ -85,7 +86,14 @@ async def upsert_store_item(db: AsyncSession, key: str, value: str):
             db_item.result = None
         db_item.version += 1
     else:
-        db_item = models.GISStore(key=key, value=value, status="draft", version=1)
+        db_item = models.GISStore(
+            key=key, 
+            value=value, 
+            status="draft", 
+            version=1,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
         db.add(db_item)
     await db.commit()
     await db.refresh(db_item)

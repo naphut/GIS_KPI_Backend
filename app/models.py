@@ -52,6 +52,11 @@ class GISStore(Base):
     value: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="draft", server_default="draft", nullable=False)  # draft, completed, cleared
     result: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # Store result JSON
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        index=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, 
         default=datetime.utcnow, 
