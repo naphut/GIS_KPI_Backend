@@ -57,10 +57,5 @@ async def delete_store_value(key: str, db: AsyncSession = Depends(get_db)):
     Delete a storage key-value pair.
     """
     _store_cache.pop(key, None)
-    success = await crud.delete_store_value(db, key=key)
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Key '{key}' not found in store."
-        )
+    await crud.delete_store_value(db, key=key)
     return {"detail": f"Key '{key}' deleted successfully"}

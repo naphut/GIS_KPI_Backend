@@ -176,12 +176,7 @@ async def upsert_store_value(payload: schemas.GISStoreCreate, db: AsyncSession =
 
 @app.delete("/store/{key}")
 async def delete_store_value(key: str, db: AsyncSession = Depends(get_db)):
-    success = await delete_store_item(db, key)
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Key '{key}' not found in store."
-        )
+    await delete_store_item(db, key)
     # Clear all caches
     await cache.delete(f"store:{key}:status")
     await cache.delete(f"store:{key}:draft")
