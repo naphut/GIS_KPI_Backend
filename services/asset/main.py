@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy.dialects.postgresql import insert
 import json
 
 from services.common.database import engine, Base, get_db
@@ -73,31 +74,27 @@ async def get_store_item(db: AsyncSession, key: str):
     return result.scalar_one_or_none()
 
 async def upsert_store_item(db: AsyncSession, key: str, value: str):
-    result = await db.execute(select(models.GISStore).where(models.GISStore.key == key))
-    db_item = result.scalar_one_or_none()
-    if db_item:
-        # Always update value
-        db_item.value = value
-        db_item.updated_at = datetime.utcnow()
-        # If previous status was completed or cleared, reset it to draft
-        if db_item.status != "draft":
-            logger.info(f"Key '{key}' was in '{db_item.status}' status. Overwriting and resetting to 'draft'.")
-            db_item.status = "draft"
-            db_item.result = None
-        db_item.version += 1
-    else:
-        db_item = models.GISStore(
-            key=key, 
-            value=value, 
-            status="draft", 
-            version=1,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
-        db.add(db_item)
+    now = datetime.utcnow()
+    stmt = insert(models.GISStore).values(
+        key=key,
+        value=value,
+        status="draft",
+        version=1,
+        created_at=now,
+        updated_at=now
+    ).on_conflict_do_update(
+        index_elements=[models.GISStore.key],
+        set_={
+            "value": value,
+            "updated_at": now,
+            "status": "draft",
+            "result": None,
+            "version": models.GISStore.version + 1
+        }
+    ).returning(models.GISStore)
+    result = await db.execute(stmt)
     await db.commit()
-    await db.refresh(db_item)
-    return db_item
+    return result.scalar_one()
 
 async def delete_store_item(db: AsyncSession, key: str):
     result = await db.execute(select(models.GISStore).where(models.GISStore.key == key))
@@ -155,6 +152,7 @@ async def get_store_value(key: str, db: AsyncSession = Depends(get_db)):
     return db_item
 
 @app.post("/store", response_model=schemas.GISStore)
+@app.post("/store/", response_model=schemas.GISStore)
 async def upsert_store_value(payload: schemas.GISStoreCreate, db: AsyncSession = Depends(get_db)):
     db_item = await upsert_store_item(db, key=payload.key, value=payload.value)
     

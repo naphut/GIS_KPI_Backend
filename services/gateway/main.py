@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize global reusable client with keep-alive connection pooling
     limits = httpx.Limits(max_keepalive_connections=200, max_connections=1000)
-    app.state.client = httpx.AsyncClient(limits=limits, timeout=30.0)
+    app.state.client = httpx.AsyncClient(limits=limits, timeout=60.0, follow_redirects=True)
     logger.info("Gateway global AsyncClient initialized with keep-alive pooling.")
     yield
     await app.state.client.aclose()
@@ -67,6 +67,7 @@ async def gateway_proxy(request: Request, path: str):
     method = request.method
     headers = dict(request.headers)
     headers.pop("host", None)  # Exclude host header to prevent proxy validation failures
+    headers.pop("content-length", None)  # Allow httpx to calculate content length automatically
     
     query_params = dict(request.query_params)
     body = await request.body()

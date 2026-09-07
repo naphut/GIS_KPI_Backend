@@ -1,6 +1,8 @@
+from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy.dialects.postgresql import insert
 from app import models, schemas
 
 # ==========================================
@@ -116,25 +118,42 @@ async def get_store_value(db: AsyncSession, key: str):
 
 async def upsert_store_value(db: AsyncSession, item: schemas.GISStoreCreate):
     """
-    Create or update a key-value pair in the store.
+    Create or update a key-value pair in the store using atomic single-roundtrip upsert.
     """
-    result = await db.execute(select(models.GISStore).where(models.GISStore.key == item.key))
-    db_item = result.scalar_one_or_none()
+    now = datetime.utcnow()
+    stmt = insert(models.GISStore).values(
+        key=item.key,
+        value=item.value,
+        status="draft",
+        version=1,
+        created_at=now,
+        updated_at=now
+    ).on_conflict_do_update(
+        index_elements=[models.GISStore.key],
+        set_={
+            "value": item.value,
+            "updated_at": now,
+            "status": "draft",
+            "result": None,
+            "version": models.GISStore.version + 1
+        }
+    ).returning(models.GISStore)
     
-    if db_item:
-        db_item.value = item.value
-        db_item.updated_at = datetime.utcnow()
-    else:
-        db_item = models.GISStore(
-            key=item.key, 
-            value=item.value,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
-        db.add(db_item)
-        
+    result = await db.execute(stmt)
     await db.commit()
-    await db.refresh(db_item)
+    return result.scalar_one()
+
+async def complete_store_value(db: AsyncSession, key: str):
+    """
+    Mark a store item as completed.
+    """
+    result = await db.execute(select(models.GISStore).where(models.GISStore.key == key))
+    db_item = result.scalar_one_or_none()
+    if db_item:
+        db_item.status = "completed"
+        db_item.updated_at = datetime.utcnow()
+        await db.commit()
+        await db.refresh(db_item)
     return db_item
 
 async def delete_store_value(db: AsyncSession, key: str):
